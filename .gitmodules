@@ -1,7 +1,7 @@
 [submodule "monado"]
 	path = monado
-	url = https://gitlab.freedesktop.org/slitcch/monado.git
-	branch = mt/ht-fixes-feb
+	url = https://gitlab.freedesktop.org/monado/monado.git
+	branch = main
 	
 [submodule "escapi"]
 	path = attic/escapi
