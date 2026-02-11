@@ -4,7 +4,7 @@
 # Based on https://gitlab.freedesktop.org/mesa/mesa/-/blob/8396df5ad90aeb6ab2267811aba2187954562f81/.gitlab-ci/windows/mesa_build.ps1
 
 
-$vcpkgdir = "c:\dev\vcpkg"
+$vcpkgdir = "E:\vcpkg"
 $toolchainfile = Join-Path $vcpkgdir "scripts/buildsystems/vcpkg.cmake"
 
 
@@ -33,8 +33,9 @@ Write-Output "sourcedir:$sourcedir"
 Write-Output "toolchainfile:$toolchainfile"
 
 # I don't understand this at all. This string ends up finding VS 2019 on my machine (but *NOT* VS 2022, which is what we want), and may work for yours. Patches very welcome.
-$version = '[16.0,17.0]'
+$version = '[16.0,18.4)'
 $installPath = & "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -version $version -property installationpath
+$installPath = $installPath[0]
 Write-Output "vswhere.exe installPath: $installPath"
 # $installPath = "C:\BuildTools"
 # Write-Output "Final installPath: $installPath"
@@ -56,6 +57,7 @@ $cmakeArgs = @(
     "-DCMAKE_TOOLCHAIN_FILE=$toolchainfile"
     "-DCMAKE_INSTALL_PREFIX=$installdir"
 )
+Write-Output "About to run CMake with " + @cmakeArgs
 cmake @cmakeArgs
 
 ninja -C $builddir
