@@ -12,7 +12,9 @@
 #include <memory>
 #include <atomic>
 #include <thread>
+#include <mutex>
 #include <winsock2.h>
+#include <windows.h>
 
 #undef TIMING_DEBUGGING
 #define TRY_RESTART 1
@@ -40,19 +42,34 @@ public:
 private:
 
     bool StartSubprocess();
+    void StopSubprocess(bool graceful);
+    void StopSubprocessLocked(bool graceful);
     bool SetupListen();
 
     void HandTrackingThread();
 
-    SOCKET clientSocket;
-    SOCKET listenSocket;
+    SOCKET clientSocket = INVALID_SOCKET;
+    SOCKET listenSocket = INVALID_SOCKET;
 
     // SOCKET restarterListenSocket;
     // SOCKET restarterClientSocket;
 
-    std::atomic<bool> is_active_;
+    std::atomic<bool> is_active_{false};
     std::thread hand_tracking_thread_;
     std::thread monster_300hz_thread_;
+
+    // --- Subprocess lifetime management ---
+    std::mutex subprocess_mutex_;
+    // The tracking subprocess opens the Index cameras. If it survives driver unload,
+    // it can keep the cameras unavailable for SteamVR (Room View/etc). We therefore
+    // keep handles and terminate it deterministically in Cleanup().
+    HANDLE subprocess_job_ = nullptr;
+    HANDLE subprocess_process_ = nullptr;
+    DWORD subprocess_pid_ = 0;
+    HANDLE subprocess_stop_event_ = nullptr;
+    std::string subprocess_stop_event_name_;
+
+    bool wsa_started_ = false;
 
     std::unique_ptr<MercuryHandDevice> left_hand_;
     std::unique_ptr<MercuryHandDevice> right_hand_;

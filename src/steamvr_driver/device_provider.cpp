@@ -37,8 +37,71 @@ void DeviceProvider::Monster300HzThread()
     }
 }
 
+void DeviceProvider::StopSubprocessLocked(bool graceful)
+{
+    // Best-effort request for the tracking subprocess to exit cleanly.
+    if (subprocess_stop_event_ != nullptr)
+    {
+        SetEvent(subprocess_stop_event_);
+    }
+
+    if (subprocess_process_ != nullptr)
+    {
+        // Wait a bit for a graceful exit so the camera gets released cleanly.
+        if (graceful)
+        {
+            DWORD wait_ms = 1500;
+            DWORD rc = WaitForSingleObject(subprocess_process_, wait_ms);
+            (void)rc;
+        }
+
+        // If it's still alive, terminate as a last resort.
+        DWORD exit_code = 0;
+        if (GetExitCodeProcess(subprocess_process_, &exit_code) && exit_code == STILL_ACTIVE)
+        {
+            DriverLog("Tracking subprocess still running; terminating.");
+            TerminateProcess(subprocess_process_, 1);
+            WaitForSingleObject(subprocess_process_, 1500);
+        }
+    }
+
+    // Closing the job will also terminate any process still attached.
+    if (subprocess_job_ != nullptr)
+    {
+        CloseHandle(subprocess_job_);
+        subprocess_job_ = nullptr;
+    }
+
+    if (subprocess_process_ != nullptr)
+    {
+        CloseHandle(subprocess_process_);
+        subprocess_process_ = nullptr;
+    }
+
+    if (subprocess_stop_event_ != nullptr)
+    {
+        CloseHandle(subprocess_stop_event_);
+        subprocess_stop_event_ = nullptr;
+    }
+
+    subprocess_pid_ = 0;
+    subprocess_stop_event_name_.clear();
+}
+
+void DeviceProvider::StopSubprocess(bool graceful)
+{
+    std::lock_guard<std::mutex> lock(subprocess_mutex_);
+    StopSubprocessLocked(graceful);
+}
+
 bool DeviceProvider::StartSubprocess()
 {
+    // Prevent races with Cleanup()/error paths.
+    std::lock_guard<std::mutex> lock(subprocess_mutex_);
+
+    // If we are restarting, make sure any existing subprocess is gone.
+    StopSubprocessLocked(true);
+
     // Start the subprocess with the local address and port as arguments
     STARTUPINFO startupInfo;
     PROCESS_INFORMATION processInfo;
@@ -53,16 +116,64 @@ bool DeviceProvider::StartSubprocess()
     std::string subprocessPath = {};
     GetDriverRootPath(rootpath);
     GetSubprocessPath(subprocessPath);
-    std::string commandLine = subprocessPath + " " + std::to_string(ntohs(localAddr.sin_port)) + " \"" + hmd_config + "\" \"" + rootpath + "\" \"" + rootpath + "\\debug.txt\"";
-    std::wstring wideCommandLine(commandLine.begin(), commandLine.end());
+
+    // Create a unique stop event name so the subprocess can exit cleanly on driver unload.
+    // Use the Local namespace to avoid requiring global object privileges.
+    subprocess_stop_event_name_ = "Local\\MercurySteamVR_Stop_" + std::to_string(GetCurrentProcessId()) + "_" + std::to_string(ntohs(localAddr.sin_port));
+    subprocess_stop_event_ = CreateEventA(nullptr, /*manual reset*/ TRUE, /*initial*/ FALSE, subprocess_stop_event_name_.c_str());
+    if (subprocess_stop_event_ == nullptr)
+    {
+        DriverLog("Failed to create stop event for tracking subprocess: %d", GetLastError());
+        return false;
+    }
+
+    // Put the subprocess in a Job Object so it cannot survive driver unload.
+    subprocess_job_ = CreateJobObjectA(nullptr, nullptr);
+    if (subprocess_job_ == nullptr)
+    {
+        DriverLog("Failed to create job object for tracking subprocess: %d", GetLastError());
+        StopSubprocess(false);
+        return false;
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
+    jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(subprocess_job_, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli)))
+    {
+        DriverLog("Failed to configure job object: %d", GetLastError());
+        StopSubprocess(false);
+        return false;
+    }
+
+    // Arg order in tracking_subprocess.cpp:
+    //   <port> <vive_config_path> <root_path> [log_path] [stop_event_name]
+    std::string commandLine = subprocessPath + " " + std::to_string(ntohs(localAddr.sin_port)) +
+                              " \"" + hmd_config + "\"" +
+                              " \"" + rootpath + "\"" +
+                              " \"" + rootpath + "\\debug.txt\"" +
+                              " \"" + subprocess_stop_event_name_ + "\"";
+
     DriverLog("Creating subprocess %s!", commandLine.c_str());
     if (!CreateProcess(NULL, commandLine.data(), NULL, NULL, FALSE, 0, NULL, NULL, &startupInfo, &processInfo))
     {
         DriverLog("Error creating subprocess %s:  %d", commandLine.c_str(), WSAGetLastError());
-        closesocket(listenSocket);
-        WSACleanup();
         return false;
     }
+
+    // Attach to the job so it can't outlive the driver.
+    if (!AssignProcessToJobObject(subprocess_job_, processInfo.hProcess))
+    {
+        DriverLog("Failed to assign tracking subprocess to job: %d", GetLastError());
+        TerminateProcess(processInfo.hProcess, 1);
+        CloseHandle(processInfo.hThread);
+        CloseHandle(processInfo.hProcess);
+        StopSubprocess(false);
+        return false;
+    }
+
+    subprocess_process_ = processInfo.hProcess;
+    subprocess_pid_ = processInfo.dwProcessId;
+    // We don't need the thread handle.
+    CloseHandle(processInfo.hThread);
     return true;
 }
 
@@ -76,7 +187,7 @@ bool DeviceProvider::SetupListen()
     {
         DriverLog("Error listening for connection: %d", WSAGetLastError());
         closesocket(listenSocket);
-        WSACleanup();
+        listenSocket = INVALID_SOCKET;
         return false;
     }
     DriverLog("Server: Accepting connection!\n");
@@ -87,7 +198,7 @@ bool DeviceProvider::SetupListen()
     {
         DriverLog("Error accepting connection: %d", WSAGetLastError());
         closesocket(listenSocket);
-        WSACleanup();
+        listenSocket = INVALID_SOCKET;
         return false;
     }
 
@@ -126,6 +237,7 @@ vr::EVRInitError DeviceProvider::Init(vr::IVRDriverContext *pDriverContext)
         DriverLog("WSAStartup failed: %d", iResult);
         return vr::VRInitError_Driver_Failed;
     }
+    wsa_started_ = true;
 
     // Create a socket for the subprocess to connect to
     listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -133,6 +245,7 @@ vr::EVRInitError DeviceProvider::Init(vr::IVRDriverContext *pDriverContext)
     {
         DriverLog("Error creating socket: %d", WSAGetLastError());
         WSACleanup();
+        wsa_started_ = false;
         return vr::VRInitError_Driver_Failed;
     }
 
@@ -146,7 +259,9 @@ vr::EVRInitError DeviceProvider::Init(vr::IVRDriverContext *pDriverContext)
     {
         DriverLog("Error binding socket: %d", WSAGetLastError());
         closesocket(listenSocket);
+        listenSocket = INVALID_SOCKET;
         WSACleanup();
+        wsa_started_ = false;
         return vr::VRInitError_Driver_Failed;
     }
 
@@ -158,12 +273,24 @@ vr::EVRInitError DeviceProvider::Init(vr::IVRDriverContext *pDriverContext)
     {
         DriverLog("Error getting socket name: %d", WSAGetLastError());
         closesocket(listenSocket);
+        listenSocket = INVALID_SOCKET;
         WSACleanup();
+        wsa_started_ = false;
         return vr::VRInitError_Driver_Failed;
     }
 
     if (!StartSubprocess())
     {
+        if (listenSocket != INVALID_SOCKET)
+        {
+            closesocket(listenSocket);
+            listenSocket = INVALID_SOCKET;
+        }
+        if (wsa_started_)
+        {
+            WSACleanup();
+            wsa_started_ = false;
+        }
         return vr::VRInitError_Driver_Failed;
     }
 
@@ -275,7 +402,7 @@ void DeviceProvider::HandTrackingThread()
             //     DriverLog("recv timed out! The subprocess was probably killed by you because you're compile-edit-debugging!");
             //     break;
             // }
-            if (WSAGetLastError() == WSAECONNRESET && TRY_RESTART)
+            if (WSAGetLastError() == WSAECONNRESET && TRY_RESTART && is_active_.load())
             {
                 os_nanosleep(5000 * U_TIME_1MS_IN_NS);
                 if (!StartSubprocess())
@@ -290,9 +417,19 @@ void DeviceProvider::HandTrackingThread()
             else
             {
                 DriverLog("Error receiving data: %d", WSAGetLastError());
-                closesocket(clientSocket);
-                closesocket(listenSocket);
-                WSACleanup();
+                if (clientSocket != INVALID_SOCKET)
+                {
+                    closesocket(clientSocket);
+                    clientSocket = INVALID_SOCKET;
+                }
+                if (listenSocket != INVALID_SOCKET)
+                {
+                    closesocket(listenSocket);
+                    listenSocket = INVALID_SOCKET;
+                }
+
+                // Ensure the subprocess doesn't linger holding the camera.
+                StopSubprocess(false);
                 return;
             }
         }
@@ -408,11 +545,45 @@ bool DeviceProvider::ShouldBlockStandbyMode()
 void DeviceProvider::Cleanup()
 {
     DriverLog("Mercury Cleaning up!");
-    if (is_active_.exchange(false))
-    {
-        DriverLog("Shutting down hand tracking...");
-        hand_tracking_thread_.join();
 
-        DriverLog("Hand tracking shutdown.");
+    // Flip the flag first so worker threads don't attempt to restart the subprocess while we shut down.
+    bool was_active = is_active_.exchange(false);
+
+    // Signal the tracking subprocess to exit ASAP so it releases the camera.
+    // Do this before joining threads so we don't hang waiting on recv/accept.
+    StopSubprocess(true);
+
+    // Closing sockets helps unblock accept()/recv() in HandTrackingThread.
+    if (clientSocket != INVALID_SOCKET)
+    {
+        shutdown(clientSocket, SD_BOTH);
+        closesocket(clientSocket);
+        clientSocket = INVALID_SOCKET;
+    }
+    if (listenSocket != INVALID_SOCKET)
+    {
+        closesocket(listenSocket);
+        listenSocket = INVALID_SOCKET;
+    }
+
+    if (was_active)
+    {
+        if (hand_tracking_thread_.joinable())
+        {
+            DriverLog("Shutting down hand tracking...");
+            hand_tracking_thread_.join();
+            DriverLog("Hand tracking shutdown.");
+        }
+
+        if (monster_300hz_thread_.joinable())
+        {
+            monster_300hz_thread_.join();
+        }
+    }
+
+    if (wsa_started_)
+    {
+        WSACleanup();
+        wsa_started_ = false;
     }
 }

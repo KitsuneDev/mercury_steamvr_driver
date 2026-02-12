@@ -70,7 +70,13 @@ struct subprocess_state
 
     SOCKET connectSocket;
 
+    // Optional stop signal created by the parent SteamVR driver.
+    // When signaled, we exit cleanly to release the Index cameras.
+    HANDLE stop_event = NULL;
+
     cv::VideoCapture cap;
+
+    int camera_index = -1;
 
     vr::IVRSystem *vr_system;
 
@@ -94,6 +100,44 @@ struct subprocess_state
     struct emulated_buttons_state bs[2] = {};
 };
 
+static bool open_camera(subprocess_state &state)
+{
+    int match_idx = -1;
+
+    for (int i = 0; i < 10; i++)
+    {
+        match_idx = GetIndexIndex();
+        if (match_idx != -1)
+        {
+            break;
+        }
+        os_nanosleep(U_TIME_1MS_IN_NS * 100);
+    }
+    if (match_idx == -1)
+    {
+        U_SP_LOG_E("Could not find Index camera (GetIndexIndex returned -1)");
+        return false;
+    }
+
+    state.camera_index = match_idx;
+
+    // OpenCV MSMF can get wedged. Releasing and recreating is the most reliable recovery.
+    state.cap.release();
+
+    // See comment below about HW acceleration - disabling it improves stability on some systems.
+    state.cap = cv::VideoCapture(match_idx, cv::CAP_MSMF, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_NONE});
+    if (!state.cap.isOpened())
+    {
+        U_SP_LOG_E("Failed to open camera index %d", match_idx);
+        return false;
+    }
+
+    state.cap.set(cv::CAP_PROP_MODE, cv::VideoWriter::fourcc('Y', 'U', 'Y', 'V'));
+    state.cap.set(cv::CAP_PROP_FPS, 54.0);
+
+    return true;
+}
+
 std::string read_file(std::string_view path)
 {
     constexpr auto read_size = std::size_t(4096);
@@ -114,17 +158,7 @@ std::string read_file(std::string_view path)
 
 bool setup_camera_and_ht(subprocess_state &state)
 {
-    int match_idx = -1;
-
-    for (int i = 0; i < 10; i++)
-    {
-        match_idx = GetIndexIndex();
-        if (match_idx != -1)
-        {
-            break;
-        }
-    }
-    if (match_idx == -1)
+    if (!open_camera(state))
     {
         return false;
     }
@@ -195,10 +229,7 @@ bool setup_camera_and_ht(subprocess_state &state)
     // On Moshi's Windows 10 desktop,  {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_NONE} is absolutely needed - grabbing the camera is really flaky and eventually you need to restart to get it without those flags.
     // We probably want to steal OpenCV's cap_msmf.cpp at some point to make sure it's solid and won't change on us.
 
-    state.cap = cv::VideoCapture(match_idx, cv::CAP_MSMF, {cv::CAP_PROP_HW_ACCELERATION, cv::VIDEO_ACCELERATION_NONE});
-
-    state.cap.set(cv::CAP_PROP_MODE, cv::VideoWriter::fourcc('Y', 'U', 'Y', 'V'));
-    state.cap.set(cv::CAP_PROP_FPS, 54.0);
+    // state.cap is opened by open_camera(state) above.
 
     // // Suggestions. These are suitable for head tracking.
 
@@ -419,13 +450,12 @@ bool check_vrserver_alive(subprocess_state &state)
     return true;
 }
 
-int meow_exit()
+[[noreturn]] void meow_exit()
 {
-    meow_printf("Press any key to exit.");
-    std::cin.ignore();
-    std::cin.get();
-
-    abort();
+    // This subprocess is launched by SteamVR/vrserver. Blocking on stdin is dangerous
+    // (it can keep the Index camera open until the user finds a hidden console).
+    // Exit immediately.
+    ExitProcess(1);
 }
 
 int main(int argc, char **argv)
@@ -434,7 +464,7 @@ int main(int argc, char **argv)
 
     if (argc < 4)
     {
-        U_SP_LOG_E("Need a port, vive config location, and root path");
+        U_SP_LOG_E("Need a port, vive config location, and root path. Usage: tracking_subprocess_copy.exe <port> <vive_config_path> <root_path> [log_path] [stop_event_name]");
         meow_exit();
     }
     subprocess_state state = {};
@@ -447,6 +477,15 @@ int main(int argc, char **argv)
 
     if (argc >= 5) {
         u_sp_log_set_file_path(argv[4]);
+    }
+
+    if (argc >= 6)
+    {
+        state.stop_event = OpenEventA(SYNCHRONIZE, FALSE, argv[5]);
+        if (state.stop_event == NULL)
+        {
+            U_SP_LOG_E("Failed to open stop event '%s' (err=%d). Clean shutdown on driver unload may be less reliable.", argv[5], (int)GetLastError());
+        }
     }
 
     vr::EVRInitError error;
@@ -514,7 +553,19 @@ int main(int argc, char **argv)
 
     meow_printf("Camera");
 
-    setup_camera_and_ht(state);
+    if (!setup_camera_and_ht(state))
+    {
+        U_SP_LOG_E("Failed to initialize Index camera / hand tracking. Exiting.");
+        if (state.stop_event)
+        {
+            CloseHandle(state.stop_event);
+            state.stop_event = NULL;
+        }
+        vr::VR_Shutdown();
+        closesocket(state.connectSocket);
+        WSACleanup();
+        return 1;
+    }
 
     meow_printf("Add vars");
 
@@ -575,8 +626,18 @@ int main(int argc, char **argv)
     u_var_add_f32(&state, &state.bs[1].curls[3], "right.curls[3]");
     u_var_add_f32(&state, &state.bs[1].curls[4], "right.curls[4]");
 
+    int consecutive_failures = 0;
+    int reopen_attempts = 0;
+    uint64_t first_failure_ts = 0;
+
     while (state.running)
     {
+        if (state.stop_event && WaitForSingleObject(state.stop_event, 0) == WAIT_OBJECT_0)
+        {
+            U_SP_LOG_E("Stop event signaled; exiting.");
+            break;
+        }
+
         if (!check_vrserver_alive(state))
         {
             break;
@@ -590,9 +651,47 @@ int main(int argc, char **argv)
 
         if (!success)
         {
-            U_SP_LOG_E("Failed!");
-            break;
+            uint64_t now = os_monotonic_get_ns();
+            if (first_failure_ts == 0)
+            {
+                first_failure_ts = now;
+            }
+            consecutive_failures++;
+
+            // A few transient failures can happen; try to recover before giving up.
+            if (consecutive_failures < 10)
+            {
+                os_nanosleep(U_TIME_1MS_IN_NS * 10);
+                continue;
+            }
+
+            U_SP_LOG_E("Camera read failed (%d consecutive). Reopening camera...", consecutive_failures);
+
+            bool reopened = open_camera(state);
+            reopen_attempts += reopened ? 0 : 1;
+
+            if (reopened)
+            {
+                consecutive_failures = 0;
+                first_failure_ts = 0;
+                reopen_attempts = 0;
+                continue;
+            }
+
+            // Fail closed: if we can't recover in a short window, exit so SteamVR can regain the camera.
+            const uint64_t max_failure_window_ns = 15ull * U_TIME_1S_IN_NS;
+            if ((now - first_failure_ts) > max_failure_window_ns || reopen_attempts >= 5)
+            {
+                U_SP_LOG_E("Camera recovery failed (attempts=%d). Exiting to release camera.", reopen_attempts);
+                break;
+            }
+
+            os_nanosleep(U_TIME_1MS_IN_NS * 250);
+            continue;
         }
+
+        consecutive_failures = 0;
+        first_failure_ts = 0;
 
         //!@todo
         uint64_t time_now_uint = os_monotonic_get_ns();
@@ -677,7 +776,11 @@ int main(int argc, char **argv)
     closesocket(state.connectSocket);
     WSACleanup();
 
-    meow_exit();
+    if (state.stop_event)
+    {
+        CloseHandle(state.stop_event);
+        state.stop_event = NULL;
+    }
 
     return 0;
 }
