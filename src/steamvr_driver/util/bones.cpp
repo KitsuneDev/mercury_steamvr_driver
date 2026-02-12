@@ -2,6 +2,7 @@
 #include "tracking/t_hand_tracking.h"
 #include "math/m_api.h"
 #include "math/m_vec3.h"
+#include "util/u_hand_tracking.h"
 
 template <class T, class U>
 void convert_quaternion(const T &p_quatA, U &p_quatB)

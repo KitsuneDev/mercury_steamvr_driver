@@ -1,0 +1,81 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 23,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "win64-msvc-vcpkg-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+
+        "CMAKE_TOOLCHAIN_FILE": {
+          "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+          "type": "FILEPATH"
+        },
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+
+        "XRT_FEATURE_COLOR_LOG": "OFF"
+      }
+    },
+    {
+      "name": "win64-msvc-debug",
+      "displayName": "Windows x64 (MSVC + vcpkg) Debug",
+      "inherits": "win64-msvc-vcpkg-base",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
+      }
+    },
+    {
+      "name": "win64-msvc-relwithdebinfo",
+      "displayName": "Windows x64 (MSVC + vcpkg) RelWithDebInfo",
+      "inherits": "win64-msvc-vcpkg-base",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_INSTALL_PREFIX": "${sourceDir}/out/install/${presetName}"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win64-msvc-debug",
+      "configurePreset": "win64-msvc-debug",
+      "jobs": 8
+    },
+    {
+      "name": "win64-msvc-relwithdebinfo",
+      "configurePreset": "win64-msvc-relwithdebinfo",
+      "jobs": 8
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "win64-msvc-debug",
+      "configurePreset": "win64-msvc-debug"
+    },
+    {
+      "name": "win64-msvc-relwithdebinfo",
+      "configurePreset": "win64-msvc-relwithdebinfo"
+    }
+  ],
+  "installPresets": [
+    {
+      "name": "win64-msvc-debug",
+      "configurePreset": "win64-msvc-debug"
+    },
+    {
+      "name": "win64-msvc-relwithdebinfo",
+      "configurePreset": "win64-msvc-relwithdebinfo"
+    }
+  ]
+}

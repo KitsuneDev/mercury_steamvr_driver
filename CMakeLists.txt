@@ -40,6 +40,7 @@ set(XRT_FEATURE_SERVICE_SYSTEMD OFF)
 set(XRT_FEATURE_STEAMVR_PLUGIN OFF) # for now. we'll see what transpires
 set(XRT_FEATURE_TRACING OFF) #ditto
 set(XRT_FEATURE_SLAM OFF) #Not using it
+set(XRT_FEATURE_COLOR_LOG OFF) # Linux Only
 
 set(XRT_FEATURE_CLIENT_DEBUG_GUI OFF)
 
@@ -86,6 +87,9 @@ set(XRT_BUILD_DRIVER_SIMULATED ON)
 
 set(XRT_BUILD_SAMPLES OFF)
 
+# We do need some auxiliaries for stuff like calibration
+set(XRT_MODULE_AUX_VIVE ON)
+
 set(BUILD_TESTING OFF)
 set(BUILD_DOC OFF)
 
@@ -120,6 +124,15 @@ find_package(
 )
 
 add_subdirectory(monado)
+
+if (MSVC AND TARGET aux_util)
+  target_compile_options(aux_util PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:/FIwil/result.h>")
+  target_compile_definitions(aux_util PRIVATE
+    "$<$<COMPILE_LANGUAGE:CXX>:NOMINMAX>"
+    "$<$<COMPILE_LANGUAGE:CXX>:WIN32_LEAN_AND_MEAN>"
+  )
+endif()
+
 
 add_subdirectory(src)
 add_subdirectory(attic/cs_test)

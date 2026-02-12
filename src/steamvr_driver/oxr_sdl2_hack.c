@@ -143,7 +143,7 @@ sdl2_loop(struct sdl2_program *p)
 	igCreateContext(NULL);
 
 	// Local state
-	ImGuiIO *io = igGetIO();
+	ImGuiIO *io = igGetIO_Nil();
 
 	// Make window layout file "imgui.ini" live in config dir
 	XRT_MAYBE_UNUSED int res = u_file_get_path_in_config_dir("imgui.ini", p->layout_file, sizeof(p->layout_file));
@@ -157,8 +157,8 @@ sdl2_loop(struct sdl2_program *p)
 	}
 
 	// Setup Platform/Renderer bindings
-	igImGui_ImplSDL2_InitForOpenGL(p->win, p->ctx);
-	igImGui_ImplOpenGL3_Init(NULL);
+	ImGui_ImplSDL2_InitForOpenGL(p->win, p->ctx);
+	ImGui_ImplOpenGL3_Init(NULL);
 
 	// Setup Dear ImGui style
 	igStyleColorsDark(NULL);
@@ -188,7 +188,7 @@ sdl2_loop(struct sdl2_program *p)
 		SDL_Event event;
 
 		while (SDL_PollEvent(&event)) {
-			igImGui_ImplSDL2_ProcessEvent(&event);
+			ImGui_ImplSDL2_ProcessEvent(&event);
 
 #ifdef XRT_BUILD_DRIVER_QWERTY
 			// Caution here, qwerty driver is being accessed by the main thread as well
@@ -208,8 +208,8 @@ sdl2_loop(struct sdl2_program *p)
 		}
 
 		// Start the Dear ImGui frame
-		igImGui_ImplOpenGL3_NewFrame();
-		igImGui_ImplSDL2_NewFrame(p->win);
+		ImGui_ImplOpenGL3_NewFrame();
+		ImGui_ImplSDL2_NewFrame(); //p->win
 
 		// Start new frame.
 		igNewFrame();
@@ -235,7 +235,7 @@ sdl2_loop(struct sdl2_program *p)
 		glClearColor(gui.clear.r, gui.clear.g, gui.clear.b, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT);
 
-		igImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
+		ImGui_ImplOpenGL3_RenderDrawData(igGetDrawData());
 
 		SDL_GL_SwapWindow(p->win);
 
@@ -245,8 +245,8 @@ sdl2_loop(struct sdl2_program *p)
 	// Cleanup
 	u_var_remove_root(&gui);
 	ImPlot_DestroyContext(plot_ctx);
-	igImGui_ImplOpenGL3_Shutdown();
-	igImGui_ImplSDL2_Shutdown();
+	ImGui_ImplOpenGL3_Shutdown();
+	ImGui_ImplSDL2_Shutdown();
 	igDestroyContext(NULL);
 }
 
