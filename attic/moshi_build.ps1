@@ -56,6 +56,8 @@ $cmakeArgs = @(
     "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
     "-DCMAKE_TOOLCHAIN_FILE=$toolchainfile"
     "-DCMAKE_INSTALL_PREFIX=$installdir"
+    "-DCMAKE_CXX_FLAGS=/EHsc"
+
 )
 Write-Output "About to run CMake with " + @cmakeArgs
 cmake @cmakeArgs

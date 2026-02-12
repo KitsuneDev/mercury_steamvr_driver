@@ -24,6 +24,7 @@
 #include "os/os_time.h"
 #include "steamvr_driver/oxr_sdl2_hack.h"
 #include "CameraIdxGuesser.hpp"
+#include "vive/vive_calibration.h"
 
 namespace xat = xrt::auxiliary::tracking;
 
@@ -98,8 +99,10 @@ int main()
     info.views[0].boundary.circle.normalized_radius = 0.55;
     info.views[1].boundary.circle.normalized_radius = 0.55;
 
+	struct t_hand_tracking_create_info create_info = {};
+	create_info.cams_info = info;
     struct t_hand_tracking_sync *sync =
-        t_hand_tracking_sync_mercury_create(calib, info, "C:\\dev\\mercury_steamvr_driver\\src\\steamvr_driver\\mercury\\resources\\internal\\hand-tracking-models\\");
+        t_hand_tracking_sync_mercury_create(calib, create_info, "C:\\dev\\mercury_steamvr_driver\\src\\steamvr_driver\\mercury\\resources\\internal\\hand-tracking-models\\");
 
     xrt_frame_context blah = {};
 

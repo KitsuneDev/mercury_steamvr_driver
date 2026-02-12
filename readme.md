@@ -1,6 +1,7 @@
 # SteamVR driver for Mercury hand tracking!
 
-I am not maintaining this and the camera driver might fuck up your index cameras! https://github.com/korejan/mercury_steamvr_driver has a binary release if you want to try it at your own risk.
+A maintained version of [moshimeow's mercury_steamvr_driver](https://github.com/moshimeow/mercury_steamvr_driver) Mercury SteamVR drivers, enabling hand-tracking in HMDs with Cameras by bringing [Monado's Mercury Pipeline](https://monado.freedesktop.org/handtracking) to SteamVR.
+This fork includes patches to improve camera stability, no longer causing it to be unusable due to hanging processes.
 
 ## Build Instructions
 
@@ -8,7 +9,7 @@ Prerequisites:
 - vcpkg
 - CMake
 - Ninja
-- Visual Studio 2019, or 2022
+- Visual Studio 2022 or 2026
 
 ### Clone the repository
 ```

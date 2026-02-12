@@ -25,6 +25,7 @@
 #include "cs_test_common.hpp"
 
 #include "openvr.h"
+#include "vive/vive_calibration.h"
 
 namespace xat = xrt::auxiliary::tracking;
 
@@ -112,8 +113,12 @@ bool setup_camera_and_ht(subprocess_state &state)
     info.views[0].boundary.circle.normalized_radius = 0.55;
     info.views[1].boundary.circle.normalized_radius = 0.55;
 
+	struct t_hand_tracking_create_info create_info = {};
+	create_info.cams_info = info;
+
+
     state.sync =
-        t_hand_tracking_sync_mercury_create(calib, info, "C:\\dev\\mercury_steamvr_driver\\src\\steamvr_driver\\mercury\\resources\\internal\\hand-tracking-models\\");
+        t_hand_tracking_sync_mercury_create(calib, create_info, "C:\\dev\\mercury_steamvr_driver\\src\\steamvr_driver\\mercury\\resources\\internal\\hand-tracking-models\\");
 
     xrt_frame_context blah = {};
 
@@ -302,7 +307,7 @@ int main(int argc, char **argv)
         }
 
         struct xrt_hand_joint_set hands[2];
-        uint64_t out_timestamp;
+        int64_t out_timestamp;
         t_ht_sync_process(state.sync, frames[0], frames[1], &hands[0], &hands[1], &out_timestamp);
 
         tracking_message message = {};
