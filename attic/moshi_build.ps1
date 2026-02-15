@@ -63,6 +63,8 @@ Write-Output "About to run CMake with " + @cmakeArgs
 cmake @cmakeArgs
 
 ninja -C $builddir
+ninja -C $builddir install
+
 # ninja -C $builddir install test
 
 $buildstatus = $?
